@@ -3,12 +3,18 @@ Import ListNotations.
 
 From Interpreter Require Import ast semantics eval_expr.
 
-Fixpoint Forall_snd {A B} (P : B -> Prop) (xs : list (A * B)) : Prop :=
+(*Fixpoint Forall_snd {A B} (P : B -> Prop) (xs : list (A * B)) : Prop :=
   match xs with
   | [] => True
   | (_, b) :: xs' => P b /\ Forall_snd P xs'
-  end.
+  end.*)
 
+Inductive Forall_snd {A B} (P : B -> Prop) : (list (A * B)) -> Prop :=
+  |Forall_nil : Forall_snd P []
+  |Forall_cons : forall (a : A) (b : B) (xs : list (A * B)), 
+    P b ->
+    Forall_snd P xs ->
+    Forall_snd P ((a, b) :: xs).
 
 (* Deep induction: gives IH for expressions inside lists (EMerge branches, ECall args) *)
 Lemma expr_ind_deep (P : expr -> Prop)
@@ -41,6 +47,8 @@ Proof.
   - (* EMerge *)
     apply HMerge.
     induction brs as [|[tag eb] brs IHbrs]; simpl; auto.
+    + constructor.
+    + constructor. apply IH with (e := eb). exact IHbrs.
   - apply HArrow; apply IH.
   - apply HFby; apply IH.
   - (* ECall *)
@@ -110,31 +118,61 @@ Section WithCalls.
         intros op e1 e2 IHe1 IHe2 m calls m' calls' Hlen H.
         simpl in H.
         destruct (skip_expr e1 m calls) as [[m1 c1]|] eqn:H1; try discriminate.
-        + unfold P in IHe1. apply IHe1 with (m := m1) (m' := m').
-         (* use the IH for e1 to get length c1 = length calls *)
-assert (length c1 = length calls) as Hlen1.
-{ apply (IHe1 m calls m1 c1). 
-  - destruct (count_calls_expr_lt_binop_l e1 e2 op).
-    + exact Hlen.
-    + 
-  }
+        pose proof (IHe1 m calls m1 c1) as Hlen1.
+assert (length c1 = length calls) as Hc1.
+{ apply Hlen1. simpl in Hlen. eapply Nat.le_trans; [apply Nat.le_add_r | exact Hlen]. exact H1. }
+        assert (length c1 >= count_calls_expr e2) as Hlen2.
+{ (* derive from Hlen using Hc1 *)
+  simpl in Hlen.        (* so Hlen becomes length calls >= count_calls_expr e1 + count_calls_expr e2 *)
+  rewrite Hc1.          (* now length c1 >= ... *)
+  (* drop the + count_calls_expr e1 part *)
+  lia.
+}
 
-(* now use IH for e2 on the second skip_expr call (which is H) *)
-apply (IHe2 m1 c1 m' calls'); [ | exact H ].
-(* we need the adequacy side-condition for e2 *)
-rewrite Hlen1 in Hlen.
-lia.
+        pose proof (IHe2 m1 c1 m' calls' Hlen2 H) as Hc2.
+        rewrite <- Hc1.
+        exact Hc2.
 
 
       - (* EIf *)
         intros c t f IHc IHt IHf m calls m' calls' Hlen H.
         simpl in H.
         destruct (skip_expr c m calls) as [[m1 c1]|] eqn:Hc; try discriminate.
-        eapply IHc in Hc; [| lia ].
-        destruct (skip_expr t m1 c1) as [[m2 c2]|] eqn:Ht; try discriminate.
-        eapply IHt in Ht; [| lia ].
-        eapply IHf in H;  [| lia ].
-        lia.
+        eapply IHc in Hc.
+        + simpl in Hlen.
+          destruct (skip_expr t m1 c1) as [[m2 c2]|] eqn:Ht; try discriminate.
+          assert (length c2 = length c1) as Ht_len.
+          { apply (IHt m1 c1 m2 c2).
+            - (* adequacy for t *)
+              (* from Hlen and Hc *)
+              rewrite Hc.
+              (* Hlen: length calls >= count_calls_expr c + count_calls_expr t + count_calls_expr f *)
+              (* so length calls >= count_calls_expr t *)
+              lia.
+            - exact Ht.
+          }
+          assert (length calls' = length c2) as Hf_len.
+          { apply (IHf m2 c2 m' calls').
+            - (* adequacy for f *)
+              (* use Hlen and lengths equalities to show length c2 >= count_calls_expr f *)
+              rewrite Ht_len.
+              rewrite Hc.
+              lia.
+            - exact H.
+          }
+          rewrite Hf_len.
+          rewrite Ht_len.
+          exact Hc.
+        + simpl in Hlen.
+          eapply Nat.le_trans.
+          * (* count_calls_expr c <= count_calls_expr c + (count_calls_expr t + count_calls_expr f) *)
+            apply Nat.le_add_r.
+          * (* length calls >= that bigger sum *)
+            (* first rewrite the RHS of Hlen to match *)
+            (* if needed: *)
+            replace (count_calls_expr c + count_calls_expr t + count_calls_expr f)
+              with (count_calls_expr c + (count_calls_expr t + count_calls_expr f)) in Hlen by lia.
+            exact Hlen.
 
       - (* EPre *)
         intros e0 IHe0 m calls m' calls' Hlen H.
@@ -155,30 +193,65 @@ lia.
         intros clk brs Hbrs m calls m' calls' Hlen H.
         simpl in H.
         revert m calls m' calls' Hlen H.
-        induction Hbrs as [|[tag eb] brs Peb Hbrs IHbrs];
-          intros m calls m' calls' Hlen H; simpl in H.
+        induction Hbrs.
+        intros m calls m' calls' Hlen H; simpl in H.
         + inversion H; subst; reflexivity.
-        + simpl in Hlen.
-          destruct (skip_expr eb m calls) as [[m1 c1]|] eqn:Heb; try discriminate.
-          assert (length c1 = length calls) as Hlen1.
-          { eapply Peb; [lia| exact Heb]. }
-          eapply IHbrs.
-          * rewrite Hlen1. lia.
-          * exact H.
+        + intros m calls m' calls' Hlen Hrun.
+          destruct (skip_expr b m calls) as [[m1 c1] |] eqn:Heb; try discriminate.
+          (* head preserves length *)
+          assert (length c1 = length calls) as Hb_len.
+          {
+            apply (H m calls m1 c1).
+            - simpl in Hlen.
+              lia.
+            - exact Heb.
+          }
+          (* tail preserves length *)
+          pose proof (IHHbrs m1 c1 m' calls') as IHtail.
+          assert (length c1 >= count_calls_expr (EMerge clk xs)) as Hlen_tail.
+          {
+            rewrite Hb_len.
+            apply Nat.le_trans with (m := count_calls_expr (EMerge clk ((a, b) :: xs))).
+            - cbn. apply Nat.le_add_l.
+            - exact Hlen.
+          }
+          specialize (IHtail Hlen_tail Hrun).
+          rewrite IHtail, Hb_len.
+          reflexivity.
 
       - (* EArrow *)
         intros e1 e2 IHe1 IHe2 m calls m' calls' Hlen H.
         simpl in H.
         destruct (skip_expr e1 m calls) as [[m1 c1]|] eqn:H1; try discriminate.
-        eapply IHe1 in H1; [| lia ].
-        eapply IHe2 in H;  [| lia ].
-        lia.
+        eapply IHe1 in H1.
+        + eapply IHe2 in H.
+          rewrite H, H1.
+          * reflexivity.
+          * rewrite H1.
+            apply Nat.le_trans with (m := count_calls_expr (EArrow e1 e2)).
+            {
+              cbn.
+              apply Nat.le_add_l.
+            }
+            {
+              exact Hlen.
+            }
+        + apply Nat.le_trans with (m := count_calls_expr (EArrow e1 e2)).
+          {
+            cbn.
+            apply Nat.le_add_r.
+          }
+          {
+            exact Hlen.
+          }
 
       - (* EFby *)
         intros e1 e2 IHe1 IHe2 m calls m' calls' Hlen H.
         simpl in H.
         destruct (mem_pop_or_fresh m) as [cell m1] eqn:Hpop.
         destruct cell as [vv|]; destruct m1 as [|]; try discriminate.
+
+
         destruct (skip_expr e1 m1 calls) as [[m2 c2]|] eqn:H1; try discriminate.
         eapply IHe1 in H1; [| lia ].
         eapply IHe2 in H;  [| lia ].
