@@ -1,0 +1,16 @@
+-Q src Interpreter
+-Q tests Tests
+-Q proofs Proofs
+
+src/lexer.v
+src/ast.v
+src/parser.v
+src/semantics.v
+src/eval_expr.v
+src/eval_node.v
+src/interpreter.v
+tests/tests_lexer.v
+tests/tests_parser.v
+tests/tests_interpreter.v
+proofs/EnvLemmas.v
+proofs/EvalExprLemmas.v
