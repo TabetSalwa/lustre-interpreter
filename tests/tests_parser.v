@@ -1,11 +1,7 @@
 From Interpreter Require Import lexer ast parser interpreter.
+From Tests Require Import lustre_programs.
 From Stdlib Require Import Strings.Ascii Strings.String Lists.List.
 
-Fixpoint string_to_ascii_list (s : string) : list ascii :=
-  match s with
-  | EmptyString => nil
-  | String c s' => c :: string_to_ascii_list s'
-  end.
 
 (*Definition parse_from_string (src : string) :=
   match lex (string_to_ascii_list src) pos0 with

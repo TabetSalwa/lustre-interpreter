@@ -2,6 +2,7 @@ From Stdlib Require Import Strings.String Lists.List ZArith.
 Import ListNotations.
 
 From Interpreter Require Import interpreter semantics.
+From Tests Require Import lustre_programs.
 
 Definition src1 : string :=
   "node add(x:int; y:int) returns (z:int);

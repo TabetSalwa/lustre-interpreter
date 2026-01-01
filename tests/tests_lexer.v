@@ -1,4 +1,5 @@
-From Interpreter Require Import lexer ast parser.
+From Interpreter Require Import lexer.
+From Tests Require Import lustre_programs.
 From Stdlib Require Import Strings.Ascii Strings.String Lists.List.
 
 (* Helper functions *)
