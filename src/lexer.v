@@ -1,6 +1,21 @@
 From Stdlib Require Import Strings.Ascii Strings.String Lists.List Arith.PeanoNat.
 Import ListNotations.
 
+
+(** * Lexer
+
+  In this section, we introduce the lexer. This is the first stage of the interpreter's front-end.
+  It's role is to transform a raw input program, given as a string, into a sequence of tokens that 
+  can be consumped by the parser. This phase abstracts away low-level textual details such as form
+  atting (whitespaces, delimiters) and exposes a structured view of the program's syntactic elemen
+  ts.
+*)
+
+(** ** Helper functions
+
+  These are helper functions to handle strings and ascii characters.
+  *)
+    
 Fixpoint ascii_list_to_string (cs : list ascii) : string :=
   match cs with
   | [] => EmptyString
