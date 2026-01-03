@@ -1,27 +1,61 @@
 From Stdlib Require Import Strings.String Lists.List Arith.PeanoNat Bool.Bool ZArith.
 Import ListNotations.
 
-From Interpreter Require Import lexer.
-From Interpreter Require Import ast.
+From Interpreter Require Import lexer ast.
 
+(** * Parser
+  This file is the second stage of the front-end: it turns the token stream produced by the lexer 
+  into a well-formed AST following the constructs present in the AST file. The whole design is 
+  intentionally simple and “syntax-directed”: each function corresponds to one piece of the grammar,
+  consumes tokens from the front of the list, and returns the AST fragment + the remaining tokens.
+
+  A key choice, based on the Rocq usual techniques, is that parsing is fuelled in a few recursive 
+  places, to guarantee termination and avoid accidental non-progress loops.
+*)
+
+(** ** Parsing results and errors
+  The first inductive definition is a small error type that keeps parsing failures understandable.
+  The constructors are:
+  - [PE_EOF] : used when parsing expects more tokens but the input is already empty;
+  - [PE_Expected what got] : used when the parser knows exactly what kind of token it wanted, and reports what it actually saw.
+*)
 Inductive parse_error :=
 | PE_EOF
 | PE_Expected (what : string) (got : option token).
 
+(** 
+  This defines a uniform parser return type used everywhere. If it succeeds, it yields 
+  [inr (value, remaining_tokens)]. Otherwise, [inl parse_error]. This makes parsers compositional: 
+  any sub-parser failure bubbles up cleanly without extra plumbing.
+*)
 Definition result (A : Type) := sum parse_error (A * list token).
 
+(** ** Token-stream primitives
+  These functions are the kernel that everything else is built from.
+*)
+(**
+  [got] peeks at the next token without consuming it. It allows lookahead decisions, such as stopping
+  when encountering the keyword "tel".
+*)
 Definition got (ts : list token) : option token :=
   match ts with
   | [] => None
   | t :: _ => Some t
   end.
 
+(**
+  [pop] consumes one token.
+*)
 Definition pop (ts : list token) : result token :=
   match ts with
   | [] => inl PE_EOF
   | t :: ts' => inr (t, ts')
   end.
 
+(**
+  [expect] consumes one token and checks that it matches a predicate. If not, it produces a nice [PE_Expected]
+  error. This avoids repeating error-handling everywhere, and keeps parse functions readable.
+*)
 Definition expect (p : token -> bool) (what : string) (ts : list token) : result token :=
   match pop ts with
   | inl e => inl e
@@ -29,7 +63,14 @@ Definition expect (p : token -> bool) (what : string) (ts : list token) : result
   end.
 
 
-(* Parsing keywords *)
+(** * Token predicates
+  These helpers encode how to recognize a specific token category.
+*)
+
+(**
+  This function checks whether a token is exactly the keyword [k]. This is verbose, we may have done this
+  differently.
+*)
 Definition is_kw (k : keyword) (t : token) : bool :=
   match t with
   | T_Kw k' =>
@@ -59,8 +100,16 @@ Definition is_kw (k : keyword) (t : token) : bool :=
   | _ => false
   end.
 
+(**
+  This convenient wrapper produces a predicate suitable for [expect]
+*)
 Definition tok_kw (k : keyword) : token -> bool := fun t => is_kw k t.
 
+(**
+  This function checks whether a token is exactly a given punctuation or operator token, such
+  as parentheses, arrows, binary operators, or more. As the lexer token type has many constructors, 
+  [tok] centralizes the exact token equality logic.
+*)
 Definition tok (t0 : token) : token -> bool :=
   fun t =>
     match t0, t with
@@ -85,7 +134,12 @@ Definition tok (t0 : token) : token -> bool :=
     | _, _ => false
     end.
 
-(* Parsing identifiers, types, decl lists *)
+(** ** Parsing basic syntactic pieces
+  Here, we parse identifiers, types, decl lists.
+*)
+(**
+  This function consumes an identifier token and returns the corresponding string.
+*)
 Definition parse_ident (ts : list token) : result string :=
   match pop ts with
   | inl e => inl e
@@ -96,8 +150,11 @@ Definition parse_ident (ts : list token) : result string :=
       end
   end.
 
+(**
+  This parses a "merge" tag. In this language subset, tags are allowed to be either an 
+  identifier, or the literals [true] and [false].
+*)
 Definition parse_tag (ts : list token) : result string :=
-  (* tags used in merge branches: accept ident OR bool literal *)
   match pop ts with
   | inl e => inl e
   | inr (t, ts') =>
@@ -109,6 +166,10 @@ Definition parse_tag (ts : list token) : result string :=
       end
   end.
 
+(**
+  This parses base types (here, in our subset, signed integers or booleans) into the
+  AST type [ty]. 
+*)
 Definition parse_ty (ts : list token) : result ty :=
   match pop ts with
   | inl e => inl e
@@ -120,6 +181,10 @@ Definition parse_ty (ts : list token) : result ty :=
       end
   end.
 
+(**
+  This parses a variable delcaration of the form "x : int" or "x : bool" into a [decl].
+  This is useful because inputs, outputs and local variables are all lists of [decl].
+*)
 Definition parse_decl (ts : list token) : result decl :=
   match parse_ident ts with
   | inl e => inl e
@@ -134,6 +199,10 @@ Definition parse_decl (ts : list token) : result decl :=
       end
   end.
 
+(** ** Parsing lists of declarations
+  This parses a list of declarations inside parentheses. It is fueled, because list parsing
+  is recursive: we need to guarantee termination even if something fails.
+*)
 Fixpoint parse_decls_sep (fuel : nat) (ts : list token) : result (list decl) :=
   match fuel with
   | 0 => inl (PE_Expected "decl list (fuel exhausted)" (got ts))
@@ -161,7 +230,13 @@ Fixpoint parse_decls_sep (fuel : nat) (ts : list token) : result (list decl) :=
       end
   end.
 
-(* Some helpers *)
+(** ** Operator precedence
+  [parse_left_assoc] implements the standard parsing of left-associative chains. This 
+  prevents duplicating the left-association logic across levels. It works by:
+  1) Parsing the tighter precedence level with [sub];
+  2) Mapping the next token to a [binop] with [op_of_token]
+  3) Repeatedly folding operators with the local [loop]
+*)
 Definition parse_left_assoc
   (fuel : nat)
   (sub : nat -> list token -> result expr)
@@ -195,6 +270,10 @@ Definition parse_left_assoc
       end
   end.
 
+(**
+  Each one of the following functions maps tokens of a specific precedence class to the 
+  corresponding AST operator constructor [binop]. These are fed to [parse_left_assoc].
+*)
 Definition op_mul (t:token) : option binop :=
   match t with
   | T_OpMul => Some BMul
@@ -238,12 +317,17 @@ Definition op_or (t:token) : option binop :=
   end.
 
 
-
-
-(* Expression parsing (mutual, to break the dependency cycle) *)
-(* non-recursive precedence layers: keep as Definition *)
-
-(* recursive core *)
+(** ** Expression parsing
+  This is the precedence ladder. Expression parsing is implemented as a mutual Fixpoint
+  family of functions. It looks heavy, so it could eb improved, but the idea is simple:
+  some operators with precedence bind tighter than others, so we parse from tightest to
+  loosest.
+*)
+(**
+  [parse_aton] parses the smallest expression forms: literals, variables, parenthesized
+  expressions, unary operators, conditionals, calls, and a special merge sugar. These are
+  atoms because it's the base that the precedence layers build on.
+*)
 Fixpoint parse_atom (fuel : nat) (ts : list token) : result expr :=
   match fuel with
   | 0 => inl (PE_Expected "expression (fuel exhausted)" (got ts))
@@ -366,6 +450,33 @@ Fixpoint parse_atom (fuel : nat) (ts : list token) : result expr :=
       end
   end
 
+(**
+  These implement one precedence tier for mostly binary operators.
+*)
+with parse_mul (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_atom op_mul ts
+
+with parse_add (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_mul op_add ts
+
+with parse_cmp (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_add op_cmp ts
+
+with parse_and (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_cmp op_and ts
+
+with parse_xor (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_and op_xor ts
+
+with parse_or (fuel:nat) (ts:list token) : result expr :=
+  parse_left_assoc fuel parse_xor op_or ts
+
+
+(**
+  This function handles the clocking suffix "e when clk". It does so by parsing a normal
+  expression, then if the next token is "when", it reads the clock identifier and builds 
+  [EWhen e clk].
+*)
 with parse_when (fuel:nat) (ts:list token) : result expr :=
   match fuel with
   | 0 => inl (PE_Expected "expression (fuel exhausted)" (got ts))
@@ -384,6 +495,9 @@ with parse_when (fuel:nat) (ts:list token) : result expr :=
       end
   end
 
+(**
+  This function handles the temporal operator "e1 fby e2". 
+*)
 with parse_fby (fuel:nat) (ts:list token) : result expr :=
   match fuel with
   | 0 => inl (PE_Expected "expression (fuel exhausted)" (got ts))
@@ -402,6 +516,9 @@ with parse_fby (fuel:nat) (ts:list token) : result expr :=
       end
   end
 
+(**
+  This handles the arrow operator "e1 -> e2"
+*)
 with parse_arrow (fuel:nat) (ts:list token) : result expr :=
   match fuel with
   | 0 => inl (PE_Expected "expression (fuel exhausted)" (got ts))
@@ -418,55 +535,20 @@ with parse_arrow (fuel:nat) (ts:list token) : result expr :=
           | _ => inr (e1, ts1)
           end
       end
-  end
-
-with parse_mul (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_atom op_mul ts
-
-with parse_add (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_mul op_add ts
-
-with parse_cmp (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_add op_cmp ts
-
-with parse_and (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_cmp op_and ts
-
-with parse_xor (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_and op_xor ts
-
-with parse_or (fuel:nat) (ts:list token) : result expr :=
-  parse_left_assoc fuel parse_xor op_or ts.
-
-
-Definition parse_expr (fuel : nat) (ts : list token) : result expr :=
-  parse_arrow fuel ts.
-
-Definition parse_merge (fuel : nat) (ts : list token) : result expr :=
-  match fuel with
-  | 0 => inl (PE_Expected "merge (fuel exhausted)" (got ts))
-  | S fuel' =>
-      (* merge <clk> <e1> <e2> *)
-      match expect (tok (T_Kw K_merge)) "merge" ts with
-      | inl e => inl e
-      | inr (_, ts1) =>
-          match parse_ident ts1 with
-          | inl e => inl e
-          | inr (clk, ts2) =>
-              match parse_expr fuel' ts2 with
-              | inl e => inl e
-              | inr (e1, ts3) =>
-                  match parse_expr fuel' ts3 with
-                  | inl e => inl e
-                  | inr (e2, ts4) =>
-                      inr (EMerge clk [("true"%string, e1); ("false"%string, e2)], ts4)
-                  end
-              end
-          end
-      end
   end.
 
 
+(**
+  This is the entry point for expression parsing. It delegates to parse_arrow, which is the
+  loosest layer.
+*)
+Definition parse_expr (fuel : nat) (ts : list token) : result expr :=
+  parse_arrow fuel ts.
+
+(** ** Equations and equation lists
+  This function parses the left-hand side of an equation, because Lustre supports multi-output 
+  equations: representign the left-hand side as a list makes this more uniform.
+*)
 Definition parse_lhs (fuel:nat) (ts:list token) : result (list string) :=
   match fuel with
   | 0 => inl (PE_Expected "lhs (fuel exhausted)" (got ts))
@@ -509,6 +591,11 @@ Definition parse_lhs (fuel:nat) (ts:list token) : result (list string) :=
       end
   end.
 
+(**
+  [parse_equation] parses one equation. It follows literally the expected delimeters. First, 
+  it calls [parse_lhs], then expects "=", after that it calls [parse_expr] and finally it
+  expects ";".
+*)
 Definition parse_equation (fuel:nat) (ts:list token) : result equation :=
   match parse_lhs fuel ts with
   | inl e => inl e
@@ -527,6 +614,9 @@ Definition parse_equation (fuel:nat) (ts:list token) : result equation :=
       end
   end.
 
+(**
+  This parses the body of a "let ... tel" as a list of equations. 
+*)
 Fixpoint parse_equations (fuel:nat) (ts:list token) : result (list equation) :=
   match fuel with
   | 0 => inl (PE_Expected "equations (fuel exhausted)" (got ts))
@@ -545,6 +635,10 @@ Fixpoint parse_equations (fuel:nat) (ts:list token) : result (list equation) :=
       end
   end.
 
+(** ** Parsing whole nodes and functions as tops
+  The first function reads whether we are parsing a "node" or a "function", producing [topkind].
+  As the AST keeps that information, semantics can treat them differently if needed later.
+*)
 Definition parse_topkind (ts:list token) : result topkind :=
   match pop ts with
   | inl e => inl e
@@ -556,6 +650,9 @@ Definition parse_topkind (ts:list token) : result topkind :=
       end
   end.
 
+(**
+  This is a wrapper that enforces the surrounding parentheses.
+*)
 Definition parse_parenthesized_decls (fuel:nat) (ts:list token) : result (list decl) :=
   match expect (tok T_LParen) "(" ts with
   | inl e => inl e
@@ -570,6 +667,11 @@ Definition parse_parenthesized_decls (fuel:nat) (ts:list token) : result (list d
       end
   end.
 
+(**
+  This parses the inside of a "var ..." section: a sequence of declarations, each ending with ";", 
+  and it stops right before "let". This is separate from [parse_decls_sep] because locals variables
+  have a stricter syntax than parameters as they require ";" each time.
+*)
 Fixpoint parse_locals_decls (fuel : nat) (ts : list token) : result (list decl) :=
   match fuel with
   | 0 => inl (PE_Expected "locals decls (fuel exhausted)" (got ts))
