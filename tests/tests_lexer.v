@@ -13,18 +13,9 @@ Definition lex_from_string (s : string) : pos -> sum lex_error (list token) :=
   lex (string_to_ascii_list s).
 
 (* Visualizing the results *)
-Eval vm_compute in 
-  lex_from_string prog1.
-Eval vm_compute in
-  lex_from_string prog2.
-Eval vm_compute in
-  lex_from_string prog3.
-Eval vm_compute in
-  lex_from_string prog4.
-Eval vm_compute in 
-  lex_from_string prog5.
-Eval vm_compute in 
-  lex_from_string prog6.
+(* Ultimately didn't have time to show any useful test, but I leave the file for further
+  development *)
+
 
 
 

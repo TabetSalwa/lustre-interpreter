@@ -2,95 +2,149 @@ From Stdlib Require Import Strings.String Lists.List ZArith.
 Import ListNotations.
 
 From Interpreter Require Import interpreter semantics.
-From Tests Require Import lustre_programs.
+From Tests Require Import lustre_programs lustre_traces.
 
-Definition src1 : string :=
-  "node add(x:int; y:int) returns (z:int);
-   let
-     z = x + y;
-   tel".
+(** * Interpreter tests
+*)
 
-Definition inputs_at1 (t:nat) : env :=
-  [("x"%string, Some (VInt 2%Z));
-   ("y"%string, Some (VInt 40%Z))].
+(** ** Handling string programs and input
+  First, we define some coercions to make the results more readable.
+*)
+Definition vint (z:Z) : vopt := Some (VInt z).
+Definition vbool (b:bool) : vopt := Some (VBool b).
+Definition absent : vopt := None.
 
-Eval vm_compute in
-  run_named_from_string src1 "add" 5 inputs_at1.
-
-Definition src3 : string :=
-  "node redge(b : bool) returns (edge : bool);
-let
-  edge = false -> (b and not (pre b));
-tel".
-
-Definition inputs_at3 (t:nat) : env :=
-  [("b"%string, Some (VBool (Nat.even t)))].
-
-Eval vm_compute in
-  run_named_from_string src3 "redge" 5 inputs_at3.
-
-Fixpoint nth_default {A : Type} (d : A) (xs : list A) (t : nat) : A :=
+(** 
+  Now, we define our helper functions to read our input. [nth_vopt] creates a value option signifying whether there is or not
+  some value to be read at the [t]th tick from the input list [xs]. Then, we specialize for our two input types: integers and booleans.
+*)
+Fixpoint nth_vopt {A : Type} (to_vopt : A -> vopt) (xs : list A) (t : nat) : vopt :=
   match xs, t with
-  | [], _ => d
-  | x :: _, 0 => x
-  | _ :: xs', S t' => nth_default d xs' t'
+  | [], _ => absent
+  | x :: _, 0 => to_vopt x
+  | _ :: xs', S t' => nth_vopt to_vopt xs' t'
+  end.
+
+Definition nthZ (xs : list Z) (t : nat) : vopt :=
+  nth_vopt (fun z => (vint z)) xs t.
+
+Definition nthB (xs : list bool) (t : nat) : vopt :=
+  nth_vopt (fun b => (vbool b)) xs t.
+
+(**
+  Once we can read our input trace, we create the list of (identifier * value from the trace at tick [t]) couples. Again, we specialize
+  these for our two input types.
+*)
+Fixpoint inputs_from_traces_Z_opt (idents : list string) (traces : list (list Z)) (t:nat) : option (list (string * vopt)):=
+  match idents, traces with
+  | ident :: ident_tail, trace :: trace_tail => 
+      match inputs_from_traces_Z_opt ident_tail trace_tail t with
+      | Some input_tail => Some ((ident, nthZ trace t) :: input_tail)
+      | None => None
+      end
+  | ident :: _, [] => None
+  | [], trace :: _ => None
+  | [], [] => Some ([])
+  end.
+
+Fixpoint inputs_from_traces_B_opt (idents : list string) (traces : list (list bool)) (t:nat) : option (list (string * vopt)):=
+  match idents, traces with
+  | ident :: ident_tail, trace :: trace_tail => 
+      match inputs_from_traces_B_opt ident_tail trace_tail t with
+      | Some input_tail => Some ((ident, nthB trace t) :: input_tail)
+      | None => None
+      end
+  | ident :: _, [] => None
+  | [], trace :: _ => None
+  | [], [] => Some ([])
+  end.
+
+(**
+  Wrapper to strip the option from the resulting input snapshot
+*)
+Definition inputs_from_traces (input_opt : option (list (string * vopt))) : list (string * vopt) :=
+  match input_opt with
+  | Some input => input
+  | None => []
+  end.
+
+(** 
+  Aliases in order to simplify the function call.
+*)
+Definition inputsZ (idents : list string) (traces : list (list Z)) (t:nat) : env :=
+  inputs_from_traces (inputs_from_traces_Z_opt idents traces t).
+
+Definition inputsB (idents : list string) (traces : list (list bool)) (t:nat) : env :=
+  inputs_from_traces (inputs_from_traces_B_opt idents traces t).
+
+Fixpoint input_empty (t:nat) : env :=
+  match t with
+  |0 => []
+  |S u => ("x"%string, None)::(input_empty u)
+  end.
+
+(**
+  A function to run a program, given the source program, the entry node, the identifier of the output, fuel, and inputs.
+  The result is of the form [inl e] if there is an error [e], or [inr _] if the interpreter succesfully executed the program.
+*)
+
+Definition run_proj
+  (src entry out : string)
+  (fuel : nat)
+  (inputs_at : nat -> env)
+  : run_result (list vopt) :=
+  match run_named_from_string src entry fuel inputs_at with
+  | inl e => inl e
+  | inr outs => inr (map (fun e => lookup e out) outs)
   end.
 
 
-Definition trace1 : list bool :=
-  [true;true;true;false;false;false;false;true;true;true;true;false;false;false;true;true].
+(** ** Actual program tests
+  These are done in proof mode, as we aren't interested in showing the results anymore (the latter was useful for debugging).
+  If you want to run any test program on any trace, just write something of the form:
+  [Eval vm_compute in run_proj srcprog entrynode out fuel inputs.]
+*)
 
-Definition inputs_at_b (t : nat) : env :=
-  let b := nth_default false trace1 t in
-  [("b"%string, Some (VBool b))].
+Definition inputs_add (t:nat) : env :=
+  inputsZ ["x"%string;"y"%string] [trace_int_1;trace_int_2] t.
+
+Example test_add :
+  run_proj add "add" "z" 17 inputs_add =
+  inr [vint 1; vint 2; vint 3; vint 4; vint 5; vint 6; vint 7; vint 8; vint 9; vint 10; vint 11; vint 13; vint 15; vint 17; vint 19; vint 20; absent].
+Proof.
+  vm_compute.
+  reflexivity.
+Qed.
+
+Definition inputs_arith (t:nat) : env :=
+  inputsZ ["x"%string;"y"%string] [trace_int_2;trace_int_1] t.
+
+Example test_arith_a :
+  run_proj arith "arith" "a" 5 inputs_arith =
+  inr [vint 2; vint 4; vint 6; vint 8; vint 10].
+Proof.
+  vm_compute. 
+  reflexivity.
+Qed.
+
+Example test_arith_m :
+  run_proj arith "arith" "m" 5 inputs_arith =
+  inr [vint 2; vint 4; vint 1; vint 3; vint 0].
+Proof.
+  vm_compute. 
+  reflexivity.
+Qed.
+
+Definition inputs_if_then_else (t:nat) : env :=
+  inputsZ ["x"%string] [trace_abs] t.
+
+Example test_if_then_else :
+  run_proj if_then_else "abs" "y" 6 inputs_if_then_else =
+  inr [vint 1; vint 2; vint 3; vint 1; vint 2; vint 3].
+Proof.
+  vm_compute.
+  reflexivity.
+Qed.
 
 
-Eval vm_compute in
-  run_named_from_string src3 "redge" 16 inputs_at_b.
-
-Definition src4 : string :=
-"node mod_count(m : int) returns (y : int);
-var py : int;
-let
-  py = (-1) fby y;
-  y = (py + 1) % m;
-tel
-
-node tf_count (x : bool) returns (xb : bool; c : int);
-var nx : bool;
-let
-  nx = not x;
-  c = merge x (mod_count(512 when x)) (mod_count(512 when nx));
-  xb = x;
-tel".
-
-
-Definition inputs_at_x (t : nat) : env :=
-  let b := nth_default false trace1 t in
-  [("x"%string, Some (VBool b))].
-
-Eval compute in inputs_at_x.
-
-Eval vm_compute in
-  run_named_from_string src4 "tf_count" 16 inputs_at_x.
-
-
-Definition src5 : string :=
-  "node mult(x:int; y:int) returns (z:int);
-   let
-     z = x * y;
-   tel".
-
-Definition trace2 : list Z :=
-  [1%Z;2%Z;3%Z;4%Z;5%Z].
-
-Definition inputs5 (t:nat) : env :=
-  let n := nth_default 0%Z trace2 t in
-  [("x"%string, Some (VInt n));
-   ("y"%string, Some (VInt n))].
-
-Eval vm_compute in
-  inputs5.
-Eval vm_compute in
-  run_named_from_string src5 "mult" 5 inputs5.
 

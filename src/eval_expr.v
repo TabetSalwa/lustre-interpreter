@@ -4,6 +4,10 @@ Import Z.
 
 From Interpreter Require Import ast semantics.
 
+(** * Expression evaluation
+  This file is the heart of one-tick expression evaluation. It explains how an AST expression [expr]
+  produces a runtime value [vopt] at the current logical instant, while carefully threading
+*)
 (* ---------- Utilities for typed operations ---------- *)
 
 Definition lift1 (f : value -> option value) (x : vopt) : option vopt :=
