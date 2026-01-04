@@ -8,8 +8,12 @@ From Interpreter Require Import ast semantics.
   This file is the heart of one-tick expression evaluation. It explains how an AST expression [expr]
   produces a runtime value [vopt] at the current logical instant, while carefully threading
 *)
-(* ---------- Utilities for typed operations ---------- *)
-
+(** * Utilities for typed operations
+  Operators must work uniformly on possibly absent values (since we work with [vopt]), and also be
+  able to fail on type mismatch (for instance, "not" on an integer). So, with [lift1] and (lift2) 
+  we implement some plumbing so that absence propagates, but not wrong types: these fail. [lift1]
+  works on unary operators, while [lift2] works on binary operators.
+*)
 Definition lift1 (f : value -> option value) (x : vopt) : option vopt :=
   match x with
   | None => Some None
@@ -31,6 +35,14 @@ Definition lift2 (f : value -> value -> option value) (x y : vopt) : option vopt
       end
   end.
 
+(** ** Call-state plumbing
+  This is some plumbing so that evaluating a node call without an existing available call-slot doesn't
+  fail.
+*)
+(**
+  This state exists so that [ECall] is still robust, even if the surrounding code forgot to pre-allocate
+  enough call states.
+*)
 Definition fresh_call_state : state :=
   {|
     st_prev := empty_env;
@@ -39,14 +51,28 @@ Definition fresh_call_state : state :=
     st_init := true;
   |}.
 
+(**
+  This function is a helper function to be able to append at the end of a list. This is particularly
+  useful for returning a call-slot ater consuming it temporarily.
+*)
+Definition snoc {A : Type} (x : A) (xs : list A) : list A := xs ++ [x].
+
+(** ** Memory helpers
+  "fby" needs a memory cell. If memory is shorter than expected, we don't want to crash immediately in
+  helper code. In that case, we want a fresh cell. This is mostly used to simplify "fby" and skipping.
+*)
 Definition mem_pop_or_fresh (m : mem) : cell * mem :=
   match mem_pop m with
   | Some (c, m') => (c, m')
   | None => (None, [])   (* fresh uninitialized cell *)
   end.
 
-Definition snoc {A : Type} (x : A) (xs : list A) : list A := xs ++ [x].
-
+(** ** Counting calls
+*)
+(** 
+  Some properties need to know how many node calls appear in a piece of syntax, so they can allocate enough
+  call-slots. This is particularly useful to prove "we never run out".
+*)
 Fixpoint count_calls_expr (e : expr) : nat :=
   match e with
   | EInt _ | EBool _ | EVar _ => 0
@@ -64,13 +90,21 @@ Fixpoint count_calls_expr (e : expr) : nat :=
       1 + fold_right (fun a acc => count_calls_expr a + acc) 0 args
   end.
 
+(**
+  Same idea as above, but for a node body.
+*)
 Definition count_calls_eqs (eqs : list equation) : nat :=
   fold_right (fun eq acc => count_calls_expr eq.(eq_rhs) + acc) 0 eqs.
 
 
 
-(* ---------- Primitive operations ---------- *)
-
+(** ** Primitive operations
+  This is the actual meaning of operators.
+*)
+(**
+  [eval_unop] centralizes the runtime meaning of unary operators so the evaluator stays clean. In other
+  words, when the constructs match, we execute. If there's any mismatch, there is a failure.
+*)
 Definition eval_unop (op : unop) (v : value) : option value :=
   match op with
   | UNot =>
@@ -85,9 +119,12 @@ Definition eval_unop (op : unop) (v : value) : option value :=
       end
   end.
 
+(**
+  Same, but for binary operators. 
+*)
 Definition eval_binop (op : binop) (v1 v2 : value) : option value :=
   match op with
-  (* arithmetic on nat *)
+  (* arithmetic on Z *)
   | BPlus =>
       match v1, v2 with
       | VInt a, VInt b => Some (VInt (a + b))
@@ -123,7 +160,7 @@ Definition eval_binop (op : binop) (v1 v2 : value) : option value :=
       end
 
 
-  (* comparisons on nat -> bool *)
+  (* comparisons on Z -> bool *)
   | BLt =>
       match v1, v2 with
       | VInt a, VInt b => Some (VBool (Z.ltb a b))
@@ -163,7 +200,19 @@ Definition eval_binop (op : binop) (v1 v2 : value) : option value :=
       end
   end.
 
-(* ---------- Memory skipping (for untaken branches) ---------- *)
+(** ** Skipping
+  This is the alignment workhorse.
+*)
+(** 
+  [skip_expr] is the main engineering trick of the file. When an expression branch is not taken (such
+  as with an "if then else" branching construct, or the untaken branch of a "merge", we still need to 
+  consume exactly the same amount of delay memory and call-slots that we would have consumed if we had
+  evaluated it. Otherwise, the memory tape and the call stack become desynchronized, and the next tick
+  will read the wrong cells/wrong call states. 
+
+  So, [skip_expr] is like an evaluation without producing a value: it traverses the expression just to
+  keep the [(mem, calls)] pointers aligned.
+*)
 Fixpoint skip_expr (e : expr) (m : mem) (calls : list state)
   : option (mem * list state) :=
   match e with
@@ -256,7 +305,20 @@ Fixpoint skip_expr (e : expr) (m : mem) (calls : list state)
 
   end.
 
-
+(** ** Commit pass
+  This file uses a two-pass idea for some temporal behavior:
+  - [eval_expr] computes the value for this tick,
+  - while [commit_expr] is a pass that is used to record next information once [curr] is complete.
+*)
+(** 
+  This mirrors the structure of [eval_expr]. For most constructs, this behaves like an evaluation.
+  For branching, it records the selected part and skips the rest to maintain alignment. For [EFby],
+  it reserves one delay cell, then:
+  - at initialization, output is [e1] and it stores the committed value of [e2] into the cell for next tick,
+  - otherwise, it skips [e1], outputs the old cell value, and still commits [e2] to refresh the cell.
+  For [ECall], the commit pass doesn't actually step calls again. It returns [None] as the call result
+  and pushed the call-slot back unchanged.
+*)
 Fixpoint commit_expr
   (init : bool) (prev curr : env) (e : expr) (m : mem) (calls : list state)
   : option (vopt * mem * list state) :=
@@ -487,17 +549,20 @@ Fixpoint commit_expr
   end.
 
 
-(* ---------- Expression evaluation (one instant) ---------- *)
+(** ** Main evaluator
+  Here we open a section [WithCalls] because expression evaluation needs to evaluate node calls of
+  the form [ECall f args], but the logic for stepping a node belongs to another file. So, this file
+  remains modular by assuming a callback.
+*)
 
 Section WithCalls.
 
-(* Provided by eval_node (or whoever drives evaluation):
-   step a node call with its own sub-state, given evaluated argument values. *)
 Variable call_node : string -> state -> list vopt -> option (state * vopt).
 
-
-
-
+(**
+  This is the actual expression evaluator: it computes the value of an expression at one logical 
+  instant, while threading memory and call states.
+*)
 Fixpoint eval_expr
   (init : bool) (prev curr : env) (e : expr) (m : mem) (calls : list state)
   : option (vopt * mem * list state) :=
@@ -720,6 +785,12 @@ Fixpoint eval_expr
 
   end.
 
+(** ** Read-only evaluator
+  This is used for two-phase node execution.
+  [eval_expr_ro] exists because sometimes we want to evaluate an expression without changing the delay
+  memory, because we are in a phase where we only want the output but we don't want to commit next state
+  updates yet. This is useful because "fby" normally wants to write into memory. 
+*)
 Fixpoint eval_expr_ro (*read-only*)
   (init : bool) (prev curr : env) (e : expr) (m : mem) (calls : list state)
   : option (vopt * mem * list state) :=
