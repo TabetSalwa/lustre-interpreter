@@ -129,14 +129,7 @@ Proof.
       reflexivity.
 Qed.
 
-(* Prove that lookup hits the right variable under a no-duplicate hypothesis
-
-set_many processes (a,v0) first, then the rest.
-
-If your target (x,v) is the head pair, you’re done, and NoDup tells you future updates can’t overwrite x.
-
-If your target pair is in the tail, you just recurse on the tail with the updated environment.*)
-
+(* Prove that lookup hits the right variable under a no-duplicate hypothesis*)
 Lemma lookup_set_many_nodup :
   forall env xs vs x v,
     NoDup xs ->
@@ -157,30 +150,20 @@ Proof.
     + (* vs = v0 :: vs' *)
       simpl in eq_length.
       inversion eq_length as [eq_length'].
-
-      (* NoDup (a :: xs) gives ~In a xs and NoDup xs *)
       inversion nodup_xs as [| ? ? notin_a_xs nodup_xs']; subst.
-
-      (* expand combine membership *)
       simpl in in_combine.
-      simpl. (* unfolds set_many one step: set_many (set env a v0) xs vs' *)
+      simpl.
 
       destruct in_combine as [head_eq | tail_in].
       * (* head pair is (x,v) = (a,v0) *)
         inversion head_eq; subst x v.
-
-        (* update a to v0, then later updates (on xs) don't touch a because ~In a xs *)
         rewrite (lookup_set_many_notin (set env a v0) xs vs' a).
-        -- (* now lookup (set env a v0) a = v0 *)
-           rewrite lookup_set_same. reflexivity.
+        -- rewrite lookup_set_same. reflexivity.
         -- exact notin_a_xs.
 
       * (* pair (x,v) is in the tail combine xs vs' *)
-        (* From In (x,v) (combine xs vs') we get In x xs *)
         assert (In x xs) as in_x_xs_tail.
         { apply in_combine_l in tail_in. exact tail_in. }
-
-        (* Now apply IH on the tail *)
         apply (IH (set env a v0) vs' x v).
         -- exact nodup_xs'.
         -- exact in_x_xs_tail.
@@ -209,8 +192,7 @@ Proof.
       simpl in Hlen. discriminate.
     + (* vs1 = v :: vs1' *)
       simpl in Hlen. inversion Hlen as [Hlen'].
-      simpl.  (* unfolds set_many one step on both sides *)
-      (* goal now matches IH with updated env *)
+      simpl.
       apply IH.
       exact Hlen'.
 Qed.
@@ -282,7 +264,6 @@ Proof.
   - apply eq.
   - (* step *)
     apply IH.
-    (* show env_equiv after one set *)
     intros y; unfold set; simpl.
     destruct (String.eqb y a).
     + reflexivity.
