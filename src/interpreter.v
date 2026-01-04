@@ -8,14 +8,6 @@ Import ListNotations.
 
 From Interpreter Require Import lexer ast parser semantics eval_node.
 
-(* ---------------- Utilities: string -> list ascii ---------------- *)
-
-Fixpoint string_to_ascii_list (s : string) : list ascii :=
-  match s with
-  | EmptyString => []
-  | String c s' => c :: string_to_ascii_list s'
-  end.
-
 (* ---------------- Program parsing (many tops) ---------------- *)
 
 Fixpoint drop_semi (ts : list token) : list token :=

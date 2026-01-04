@@ -21,7 +21,7 @@ Fixpoint decl_names (ds : list decl) : list string :=
   | d :: ds' => decl_name d :: decl_names ds'
   end.
 
-(* Restrict env to a list of names, producing a *finite env list*.
+(* Restrict env to a list of names, producing a finite env list.
    Each output appears exactly once in the produced env. *)
 Fixpoint project_env (names : list string) (ρ : env) : env :=
   match names with
@@ -47,7 +47,7 @@ Fixpoint find_top (f : string) (p : list top) : option top :=
      - stepping a node evaluates its equations,
      - evaluating an expression may call another node.
 
-   To keep this definitional in Coq, we thread a [call_fuel] that is
+   To keep this definitional in Rocq, we thread a [call_fuel] that is
    decremented at each [ECall]. This prevents non-termination in the
    presence of (possibly ill-formed) recursive call graphs.
 
