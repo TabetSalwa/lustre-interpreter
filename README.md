@@ -7,6 +7,24 @@ The main goal is not completeness with respect to the full Lustre language, but 
 
 ---
 
+## Building and documentation
+
+### Installation
+
+To build the project, run the following command from the repository root:
+
+```bash
+make
+```
+To generate the project documentation, run:
+```bash 
+
+make install-doc
+```
+This will produce the documentation for the project.
+
+---
+
 ## Project overview
 
 The interpreter follows a classical compiler pipeline:
