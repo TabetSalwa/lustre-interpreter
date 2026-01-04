@@ -697,7 +697,11 @@ Fixpoint parse_locals_decls (fuel : nat) (ts : list token) : result (list decl) 
       end
   end.
 
-
+(**
+  Parses an (optional) local-variable section. Since "var" is optional in Lustre, this function makes
+  its presence or absence painless for the next function, [parse_top]. So, if the next token is [var],
+  it consumes it and parses locals, otherwise it returns the empty locals list.
+*)
 Definition parse_locals (fuel:nat) (ts:list token) : result (list decl) :=
   match fuel with
   | 0 => inl (PE_Expected "locals (fuel exhausted)" (got ts))
@@ -714,7 +718,9 @@ Definition parse_locals (fuel:nat) (ts:list token) : result (list decl) :=
       end
   end.
 
-
+(**
+  This function parses a full top-level definition (node or function) in one pass.
+*)
 Definition parse_top (fuel:nat) (ts:list token) : result top :=
   match parse_topkind ts with
   | inl e => inl e
