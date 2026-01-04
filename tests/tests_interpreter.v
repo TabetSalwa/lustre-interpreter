@@ -101,7 +101,7 @@ Definition run_proj
 
 (** ** Actual program tests
   These are done in proof mode, as we aren't interested in showing the results anymore (the latter was useful for debugging).
-  If you want to run any test program on any trace, just write something of the form:
+  If you want to run any test program on any trace and see what it yields, just write something of the form:
   [Eval vm_compute in run_proj srcprog entrynode out fuel inputs.]
 *)
 
@@ -146,5 +146,19 @@ Proof.
   reflexivity.
 Qed.
 
+Definition inputs_tf_count (t:nat) : env :=
+  inputsB ["x"%string] [trace_tf_count_1] t.
 
+Example test_tf_count :
+  run_proj alternating_count "tf_count" "c" 16 inputs_tf_count =
+  inr [vint 0; vint 1; vint 2; 
+       vint 0; vint 1; vint 2;
+       vint 3; vint 3; vint 4;
+       vint 5; vint 6; vint 4;
+       vint 5; vint 6; vint 7;
+       vint 8].
+Proof.
+  vm_compute.
+  reflexivity.
+Qed.
 
